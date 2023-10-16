@@ -1,0 +1,48 @@
+# main links
+main:
+  - title: "Home"
+    url: https://SBSun.github.io/
+
+  - title: "About"
+    url: /about/
+
+  - title: "GitHub"
+    url: https://github.com/SBSun
+
+  # - title: "Projects"
+  #   url: /projects/
+
+  # - title: "Categories"
+  #   url: /categories/
+
+# sidebar navigation (categories)
+# 2022.02.15 sidebar update : simple ver.
+categories:
+   - title: "Programming"
+     children:
+       - title: "Java"
+         url: /categories/java/
+       - title: "JPA"
+         url: /categories/jpa/
+       - title: "Spring"
+         url: /categories/spring/
+   - title: "개발 지식"
+     children:
+       - title: "CS"
+         url: /categories/cs
+       - title: "Web"
+         url: /categories/web
+       - title: "DB"
+         url: /categories/db  
+       - title: "Network"
+         url: /categories/network
+
+   - title: "DevOps"
+     url: /categories/devops
+
+   - title: "Git"
+     url: /categories/git
+
+   - title: "AWS"
+     url: /categories/aws/
+
