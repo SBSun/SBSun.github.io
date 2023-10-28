@@ -1,6 +1,6 @@
 ---
-title: "[Cookie] 비동기 이메일 전송 구현"
-excerpt: "비동기 이메일 전송 기능을 구현해보자."
+title: "[Cookie] SameSite 설정"
+excerpt: "Cookie SameSite 설정"
 
 categories:
   - Trouble Shooting
