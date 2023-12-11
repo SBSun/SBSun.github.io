@@ -15,7 +15,7 @@ toc: true
 toc_sticky: true
 
 date: 2023-12-10
-last_modified_at: 2023-12-10
+last_modified_at: 2023-12-11
 ---
 
 ## 배경
@@ -59,7 +59,185 @@ Blue 서버가 배포되어 있는 상태에서 Green 버전의 배포가 진행
 
 이처럼 Nginx는 서버 내부에서 트래픽을 어디로 라우팅할 것인지 정해 요청을 전달하므로 한대의 서버에서 2개의 어플리케이션을 이용하여 무중단 배포를 할 수 있습니다.
 
+<br><br>
+
+## 구축 과정
+
+--- 
+
+### 1. 웹 서버 설정
+
+```bash
+# 설정파일 열기
+sudo vi /etc/nginx/nginx.conf
+```
+
+```bash
+# /etc/nginx/nginx.conf
+server {
+				# 포트 설정.
+        listen       8080;
+        listen       [::]:8080;
+        server_name  _;
+        root         /usr/share/nginx/html;
+
+        # Load configuration files for the default server block.
+        include /etc/nginx/default.d/*.conf;
+
+        include /etc/nginx/conf.d/service-url.inc;
+
+        location / {
+								# 프록시 연결 설정
+                proxy_pass $service_url;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header Host $http_host;
+        }
+}
+```
+
+```bash
+# /etc/nginx/conf.d/service-url.inc;
+# 배포할 때 마다 포트 변경
+# 서버 A -> 8090, 서버 B -> 8091
+set $service_url http://127.0.0.1:8090;
+```
+
+`listen 8080;` 해당 코드를 통해 8080 포트로 설정하고, 해당 포트에 요청이 들어오면 현재 Nginx와 연결 중인 `proxy_pass $service_url;` 즉, **$service_url**이 가르키고 있는 **http://127.0.0.1:8090** 서버에 요청을 전달합니다.
+
+$service_url의 포트는 배포할 때마다 변경됩니다.
+
 <br>
+
+### 2. blue, green docker-compose 작성
+
+```bash
+# docker-compose.blue.yml 
+version: '3'
+services:
+  app:
+    build:
+      dockerfile: Dockerfile-main
+    image: bnfkim/chips
+    expose:
+      - 8090
+    ports:
+      - 8090:8080
+```
+
+```bash
+# docker-compose.green.yml 
+version: '3'
+services:
+  app:
+    build:
+      dockerfile: Dockerfile-main
+    image: bnfkim/chips
+    expose:
+      - 8091
+    ports:
+      - 8091:8080
+```
+
+두 **docker-compose.yml** 파일은 포트만 다를 뿐 컨테이너 정보는 동일합니다.
+
+<br>
+
+### 3. deploy.sh
+
+```bash
+#1
+EXIST_BLUE=$(docker-compose -p spring-blue -f docker-compose.blue.yml ps | grep Up)
+
+if [ -z "$EXIST_BLUE" ]; then
+    docker-compose -p spring-blue -f docker-compose.blue.yml up -d
+    BEFORE_COLOR="green"
+    AFTER_COLOR="blue"
+    BEFORE_PORT=8091
+    AFTER_PORT=8090
+else
+    docker-compose -p spring-green -f docker-compose.green.yml up -d
+    BEFORE_COLOR="blue"
+    AFTER_COLOR="green"
+    BEFORE_PORT=8090
+    AFTER_PORT=8091
+fi
+
+echo "${AFTER_COLOR} server up(port:${AFTER_PORT})"
+
+# 2
+for cnt in {1..10}
+do
+    echo "서버 응답 확인중(${cnt}/10)";
+    UP=$(curl -s http://localhost:${AFTER_PORT}/api/healthCheck)
+    if [ -z "${UP}" ]
+        then
+            sleep 10
+            continue
+        else
+            break
+    fi
+done
+
+if [ $cnt -eq 10 ]
+then
+    echo "서버가 정상적으로 구동되지 않았습니다."
+    exit 1
+fi
+
+# 3
+echo "NginX Setting..."
+echo "set \$service_url http://127.0.0.1:$AFTER_PORT;" |sudo tee /etc/nginx/conf.d/service-url.inc
+sudo service nginx reload
+
+echo "Deploy Completed!!"
+
+# 4
+echo "$BEFORE_COLOR server down(port:${BEFORE_PORT})"
+docker-compose -p spring-${BEFORE_COLOR} -f docker-compose.${BEFORE_COLOR}.yml down
+```
+
+#### 1. 새로운 버전을 배포할 포트 결정
+
+1. 컨테이너 상태 확인 및 변수 설정
+    - **`docker-compose.blue.yml`** 파일을 사용하는 Docker Compose 프로젝트인 **`spring-blue`**에서 실행 중인 컨테이너 중 "Up" 상태인 컨테이너를 찾아서, 그 결과를 **`EXIST_BLUE`** 라는 환경 변수에 저장합니다.
+2. 조건에 따른 서비스 시작
+    - 변수 **`EXIST_BLUE`** 를 확인하여 **`spring-blue`** 프로젝트에서 "Up" 상태가 아니라면 해당 프로젝트를 시작하고, "Up" 상태라면 **`spring-green`** 프로젝트를 시작하고 포트를 결정합니다.
+
+#### 2. HealthCheck
+
+1. 반복문을 통한 서버 응답 확인
+    - 주어진 횟수 동안 서버 응답을 확인하는 작업을 수행하고, 만약 서버가 정상적으로 구동되지 않으면 해당 정보를 출력하고 스크립트를 종료합니다.
+2. 루프 종료 후의 처리
+    - 루프가 10회 돌았는지 확인합니다. 만약 10회 모두 돌았으면(서버가 10번 확인 동안 응답이 없었다면) 아래의 메시지를 출력하고 스크립트를 종료합니다.
+
+#### 3. **Nginx 설정 업데이트**
+
+1. Nginx 설정 업데이트
+    - `/etc/nginx/conf.d/service-url.inc` 파일의 **service_url** 변수를 **AFTER_PORT** 변수를 사용하여 변경 → Nginx에서 사용할 서비스 URL이 설정됩니다.
+2. Nginx 재시작
+    - Nginx에게 설정을 다시 읽도록 하여 새로운 설정이 적용되게 합니다.
+
+#### 4. 이전 버전의 서버 중단
+
+1. Docker Compose를 사용하여 이전 버전의 서비스를 중단
+    - **BEFORE_COLOR** 변수를 사용하여 이전 버전을 중단합니다.
+
+<br>
+
+<img src="../../assets/images/posts/devops/devops-nginx-blue-green-deploy/devops-nginx-blue-green-deploy-2.PNG" width="40%"><br>
+
+배포하면 현재 8090 포트가 실행중이기 때문에 8091 포트로 새로운 버전을 실행하는 모습을 볼 수 있습니다.
+
+<br><br>
+
+## 정리
+
+---
+
+CI/CD를 구축하고 나니까 자연스럽게 무중단 배포까지 관심을 가지게 되었습니다. 또한 이번 무중단 배포를 구축하면서 Nginx에 대해서도 학습하게 되어 매우 뜻깊은 시간이었습니다. 다음에는 Nginx에 대해 자세히 공부한 후에 Nginx를 사용한 로드 밸런싱을 구현해 보도록 하겠습니다.
+
+<br><br>
 
 <hr />
 참고자료<br>
